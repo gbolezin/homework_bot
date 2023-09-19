@@ -29,6 +29,7 @@ HOMEWORK_VERDICTS = {
 HOMEWORK_FIELD = 'homeworks'
 HOMEWORK_NAME_FIELD = 'homework_name'
 HOMEWORK_STATUS_FIELD = 'status'
+CURRENT_DATE = 'current_date'
 
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler(stream=sys.stdout)
@@ -50,11 +51,11 @@ logger.setLevel(logging.DEBUG)
 def check_tokens():
     """Проверка токенов, необходимых для работы бота."""
     token_list = ('PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID')
-    for token in token_list:
-        if not globals()[token]:
-            logger.critical(f'Аварийное завершение - '
-                            f'отсутствует токен {token}')
-            raise ValueError
+    missed_tokens = [token for token in token_list if not globals()[token]]
+    if missed_tokens:
+        logger.critical('Аварийное завершение - '
+                        f'отсутствуют токены {missed_tokens}')
+        raise ValueError
 
 
 def send_message(bot, message):
@@ -65,8 +66,8 @@ def send_message(bot, message):
         bot.send_message(TELEGRAM_CHAT_ID, message)
         logger.debug(f'Сообщение {message} отправлено '
                      f'в чат {TELEGRAM_CHAT_ID}')
-    except telegram.TelegramError as error:
-        raise telegram.TelegramError(error)
+    except telegram.TelegramError:
+        logger.error(f"Ошибка отправки сообщения в чат {TELEGRAM_CHAT_ID}")
 
 
 def get_api_answer(timestamp):
@@ -100,21 +101,25 @@ def check_response(response):
     if not isinstance(response, dict):
         raise TypeError(
             f'Неверный тип данных в ответе API:{type(response)}. '
-            f'Ожидаемый тип - <dict>'
+            'Ожидаемый тип - <dict>'
         )
-    if 'current_date' not in response.keys():
-        raise KeyError('В словаре response отсутствует элемент current_date')
-    elif HOMEWORK_FIELD not in response.keys():
-        raise KeyError('В словаре response отсутствует элемент homeworks')
-    else:
-        homeworks = response.get('homeworks')
-        logger.debug(f'Получен список домашних работ: {homeworks}')
+    if CURRENT_DATE not in response:
+        raise KeyError(
+            f'В словаре response отсутствует элемент {CURRENT_DATE}'
+        )
+    elif HOMEWORK_FIELD not in response:
+        raise KeyError(
+            f'В словаре response отсутствует элемент {HOMEWORK_FIELD}'
+        )
+    homeworks = response.get(HOMEWORK_FIELD)
+    logger.debug(f'Получен раздел {homeworks} из ответа от эндпойнта')
     if not isinstance(homeworks, list):
         raise TypeError(
             f'Неверный тип данных в списке домашних работ:{type(homeworks)}. '
-            f'Ожидаемый тип - <list>'
+            'Ожидаемый тип - <list>'
         )
-    logger.debug('Проверка ответа от эндпойнта завершена')
+    logger.debug(f'Получен список домашних работ: {homeworks} '
+                 'Проверка ответа от эндпойнта завершена')
     return homeworks
 
 
@@ -122,18 +127,18 @@ def parse_status(homework):
     """Парсинг статуса домашней работы."""
     logger.debug('Начинается парсинг домашней работы. ')
     if HOMEWORK_NAME_FIELD not in homework:
-        raise KeyError(f'Объект домашней работы '
+        raise KeyError('Объект домашней работы '
                        f'не содержит ключа {HOMEWORK_NAME_FIELD}'
                        )
     homework_name = homework.get(HOMEWORK_NAME_FIELD)
     logger.debug(f'Парсим домашнюю работу {homework}')
     if HOMEWORK_STATUS_FIELD not in homework:
-        raise KeyError(f'Объект домашней работы '
+        raise KeyError('Объект домашней работы '
                        f'не содержит ключа {HOMEWORK_STATUS_FIELD}'
                        )
     homework_status = homework.get(HOMEWORK_STATUS_FIELD)
     if not homework_status:
-        raise KeyError(f'Поле {HOMEWORK_STATUS_FIELD} не заполнено '
+        raise KeyError(f'Отсутствует ключ {HOMEWORK_STATUS_FIELD} '
                        f'у домашней работы {homework_name}')
     if homework_status not in HOMEWORK_VERDICTS:
         raise KeyError(f'Неизвестный статус {homework_status} '
@@ -153,17 +158,19 @@ def main():
     while True:
         try:
             homeworks = check_response(get_api_answer(timestamp))
-            if len(homeworks) > 0:
+            if homeworks:
                 tg_message = parse_status(homeworks[0])
-                if tg_message != buffer_message:
-                    send_message(bot, tg_message)
-                    buffer_message = tg_message
+                send_message(bot, tg_message)
+                buffer_message = tg_message
             else:
                 logger.debug('Новых статусов домашней работы не обнаружено')
             timestamp = int(time.time())
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logger.error(message, exc_info=True)
+            if message != buffer_message:
+                send_message(bot, message)
+                buffer_message = message
         finally:
             time.sleep(RETRY_PERIOD)
 
